@@ -1413,7 +1413,8 @@ def test_env_detection_override(hatch, helpers, temp_dir, config_file):
     assert output_file.is_file()
 
     python_path = str(output_file.read_text()).strip()
-    assert str(env_dirs[1]) in python_path
+    # With .venv file, the foo environment path should be used due to it being the last created (active)
+    assert str(env_dirs[0]) in python_path
 
 
 def test_matrix_variable_selection_no_command(hatch, helpers, temp_dir, config_file):

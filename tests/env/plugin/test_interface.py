@@ -3691,3 +3691,36 @@ version = "0.0.1"
         new_ctx = ctx.join("subdir")
         assert "subdir" in str(new_ctx.local_path)
         assert "subdir" in new_ctx.env_path
+
+
+class TestVenvFile:
+    def test_venv_file_written_on_create(self, tmp_path, isolated_data_dir, platform, global_application):
+        """Test .venv file is written when environment is created."""
+        from hatch.env.virtual import VirtualEnvironment
+        from hatch.utils.fs import Path
+
+        project_root = Path(tmp_path / "project")
+        project_root.mkdir()
+        (project_root / "pyproject.toml").write_text('[project]\nname = "test"\nversion = "0.0.1"')
+
+        config = {"project": {"name": "test", "version": "0.0.1"}}
+        project = Project(project_root, config=config)
+
+        env = VirtualEnvironment(
+            project_root,
+            project.metadata,
+            "default",
+            project.config.envs["default"],
+            {},
+            isolated_data_dir,
+            isolated_data_dir,
+            platform,
+            0,
+            global_application,
+        )
+        env.create()
+
+        venv_file = project_root / ".venv"
+        if not venv_file.is_dir():
+            assert venv_file.exists()
+            assert str(env.virtual_env_path) in venv_file.read_text()

@@ -55,6 +55,59 @@ class VirtualEnvironment(EnvironmentInterface):
         else:
             app_virtual_env_path = self.isolated_data_directory / project_name / project_id / venv_name
 
+        # Try to use existing .venv file or fall back to normal paths
+        if not self._try_use_venv_file(venv_name, project_is_script):
+            self._set_normal_paths(project_name, project_id, venv_name, project_is_script)
+
+        self.virtual_env = self.virtual_env_cls(self.virtual_env_path, self.platform, self.verbosity)
+        self.build_virtual_env = self.virtual_env_cls(
+            app_virtual_env_path.parent / f"{app_virtual_env_path.name}-build", self.platform, self.verbosity
+        )
+        self.shells = ShellManager(self)
+        self._parent_python = None
+
+    def _try_use_venv_file(self, venv_name, project_is_script):
+        """Try to use existing .venv file. Returns True if successful."""
+        venv_file = self.root / ".venv"
+
+        if not (
+            venv_file.is_file()
+            and self.name == "default"
+            and not self.get_env_var_option("path")
+            and not self.config.get("path", "")
+            and not project_is_script
+            and not (self.root / ".venv").is_dir()
+        ):
+            return False
+
+        try:
+            existing_path = Path(venv_file.read_text().strip())
+            if (
+                existing_path.is_absolute()
+                and existing_path.exists()
+                and self._is_valid_venv(existing_path)
+                and existing_path != self.isolated_data_directory / venv_name
+            ):
+                self.storage_path = existing_path.parent
+                self.virtual_env_path = existing_path
+                return True
+        except (OSError, ValueError):
+            pass
+
+        return False
+
+    def _is_valid_venv(self, path):
+        """Validate that path points to a real virtual environment."""
+        if not path.is_dir():
+            return False
+
+        # Check for standard venv structure
+        bin_dir = path / ("Scripts" if self.platform.windows else "bin")
+        python_exe = bin_dir / ("python.exe" if self.platform.windows else "python")
+
+        return bin_dir.is_dir() and python_exe.is_file()
+
+    def _set_normal_paths(self, project_name, project_id, venv_name, project_is_script):
         # Explicit path
         chosen_directory = self.get_env_var_option("path") or self.config.get("path", "")
         if chosen_directory:
@@ -75,14 +128,6 @@ class VirtualEnvironment(EnvironmentInterface):
         else:
             self.storage_path = self.data_directory / project_name / project_id
             self.virtual_env_path = self.storage_path / venv_name
-
-        self.virtual_env = self.virtual_env_cls(self.virtual_env_path, self.platform, self.verbosity)
-        self.build_virtual_env = self.virtual_env_cls(
-            app_virtual_env_path.parent / f"{app_virtual_env_path.name}-build", self.platform, self.verbosity
-        )
-        self.shells = ShellManager(self)
-
-        self._parent_python = None
 
     @cached_property
     def use_uv(self) -> bool:
@@ -171,6 +216,9 @@ class VirtualEnvironment(EnvironmentInterface):
 
         with self.expose_uv():
             self.virtual_env.create(self.parent_python, allow_system_packages=self.config.get("system-packages", False))
+        from hatch.venv.utils import write_venv_file
+
+        write_venv_file(self.root, self.virtual_env_path)
 
     def remove(self):
         self.virtual_env.remove()
