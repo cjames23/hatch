@@ -413,21 +413,35 @@ class EnvironmentInterface(ABC):
     @cached_property
     def all_dependencies_complex(self) -> list[Dependency]:
         from hatch.dep.core import Dependency
+        from hatch.utils.metadata import normalize_project_name
 
         local_deps = list(self.local_dependencies_complex)
         workspace_names = {dep.name.lower() for dep in local_deps}
 
         filtered_deps: list[Dependency] = []
+        optional_dependencies: dict[str, list[str]] | None = None
         for dep in self.dependencies_complex:
             dep_obj = dep if isinstance(dep, Dependency) else Dependency(str(dep))
 
             if dep_obj.name.lower() in workspace_names and dep_obj.extras:
-                # Only expand if we have static optional dependencies to avoid recursion
-                if not self.metadata.hatch.metadata.hook_config:
-                    optional_dependencies = self.metadata.core.optional_dependencies
-                    for extra in dep_obj.extras:
-                        if extra in optional_dependencies:
-                            filtered_deps.extend(Dependency(d) for d in optional_dependencies[extra])
+                # Lazily resolve optional dependencies on first use
+                if optional_dependencies is None:
+                    if not self.metadata.hatch.metadata.hook_config:
+                        # No metadata hooks, safe to read directly
+                        optional_dependencies = self.metadata.core.optional_dependencies
+                    else:
+                        # Metadata hooks are configured; resolve through the PEP 517
+                        # build frontend which runs hooks safely in an isolated
+                        # build environment rather than in-process
+                        _, optional_dependencies = self.app.project.get_dependencies()
+
+                for extra in dep_obj.extras:
+                    normalized_extra = normalize_project_name(extra)
+                    for key, deps in optional_dependencies.items():
+                        if normalize_project_name(key) == normalized_extra:
+                            filtered_deps.extend(Dependency(d) for d in deps)
+                            break
+
             elif dep_obj.name.lower() not in workspace_names:
                 filtered_deps.append(dep_obj)
 
@@ -578,10 +592,7 @@ class EnvironmentInterface(ABC):
                 raise ValueError(message)
 
             normalized_dependency_group = normalize_project_name(dependency_group)
-            if (
-                not self.metadata.hatch.metadata.hook_config
-                and normalized_dependency_group not in self.app.project.dependency_groups
-            ):
+            if normalized_dependency_group not in self.app.project.dependency_groups:
                 message = (
                     f"Dependency Group `{normalized_dependency_group}` of field `tool.hatch.envs.{self.name}.dependency-groups` is not "
                     f"defined in field `dependency-groups`"
